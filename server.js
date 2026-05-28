@@ -401,6 +401,37 @@ async function lookupTwitterProfile(username) {
   };
 }
 
+async function searchUserTweets(userId) {
+  if (!officialBearerToken) throw new Error("TWITTER_BEARER_TOKEN or X_API_BEARER_TOKEN is not set");
+  const params = new URLSearchParams({
+    max_results: "20",
+    exclude: "retweets,replies",
+    "tweet.fields": "public_metrics,created_at"
+  });
+  const response = await fetch(`https://api.twitter.com/2/users/${userId}/tweets?${params}`, {
+    headers: {
+      Authorization: `Bearer ${officialBearerToken}`,
+      "User-Agent": "ViralJarDashboard/1.0",
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) return [];
+  const json = await response.json();
+  return (json.data || []).map((tweet) => {
+    const metrics = tweet.public_metrics || {};
+    return {
+      id: tweet.id,
+      text: decodeHtml(tweet.text || ""),
+      likes: Number(metrics.like_count || 0),
+      reposts: Number(metrics.retweet_count || 0),
+      replies: Number(metrics.reply_count || 0),
+      createdAt: tweet.created_at || "",
+      score: Number(metrics.like_count || 0) + Number(metrics.retweet_count || 0) * 2 + Number(metrics.reply_count || 0) * 3
+    };
+  });
+}
+
 function profileSearchQuery(profile, niche) {
   if (niche?.trim()) return niche.trim();
   const words = profile.description
@@ -409,6 +440,146 @@ function profileSearchQuery(profile, niche) {
     .filter((word) => word.length > 3)
     .slice(0, 4);
   return words.join(" ") || profile.username;
+}
+
+function keywordsFromText(text) {
+  const stop = new Set(["with", "from", "that", "this", "your", "have", "will", "into", "about", "http", "https", "they", "them", "what", "when", "where", "more", "their", "using", "built", "building", "there", "then", "after", "before", "than", "just", "ever", "very", "over", "under", "through", "because", "these", "those", "thing", "things", "gets", "make", "makes"]);
+  return [...text.toLowerCase().matchAll(/[a-z][a-z0-9]{3,}/g)]
+    .map((match) => match[0])
+    .filter((word) => !stop.has(word))
+    .reduce((counts, word) => counts.set(word, (counts.get(word) || 0) + 1), new Map());
+}
+
+function inferContentPillars(niche, profile, keywords) {
+  const combined = `${niche} ${profile.description} ${keywords.join(" ")}`.toLowerCase();
+  if (/ai|agent|automation|productivity|workflow|software|developer|coding/.test(combined)) {
+    return ["AI workflows", "Productivity systems", "Operator leverage", "Practical proof"];
+  }
+  if (/invest|market|finance|business|revenue|sales|crypto|trading/.test(combined)) {
+    return ["Market signals", "Business lessons", "Risk and upside", "Founder judgment"];
+  }
+  if (/creator|content|writing|brand|audience|newsletter|design/.test(combined)) {
+    return ["Audience growth", "Creative process", "Content systems", "Personal proof"];
+  }
+  const fallback = keywords.slice(0, 4).map((word) => word.replace(/^\w/, (letter) => letter.toUpperCase()));
+  return fallback.length ? fallback : ["Point of view", "Proof", "Process", "Lessons"];
+}
+
+function topKeywords(...texts) {
+  const merged = new Map();
+  texts.forEach((text) => {
+    keywordsFromText(text || "").forEach((count, word) => merged.set(word, (merged.get(word) || 0) + count));
+  });
+  return [...merged.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([word]) => word);
+}
+
+function inferTargetDemographic(niche, profile, keywords) {
+  const combined = `${niche} ${profile.description} ${keywords.join(" ")}`.toLowerCase();
+  const technical = /ai|software|developer|engineer|agent|automation|productivity|coding|tech|startup|founder/.test(combined);
+  const finance = /finance|invest|market|crypto|trading|business|revenue|sales/.test(combined);
+  const creator = /creator|content|writing|brand|design|newsletter|audience/.test(combined);
+
+  if (technical) {
+    return {
+      primary: "builders, founders, operators, and technical decision-makers",
+      genderSkew: "likely male-skewing but not gender-exclusive",
+      ageBand: "24-44",
+      buyerStage: "problem-aware people looking for tools, frameworks, and leverage",
+      rationale: "The niche and comparable posts lean toward AI, productivity, startups, and technical workflow language."
+    };
+  }
+  if (finance) {
+    return {
+      primary: "business owners, investors, finance-curious operators, and ambitious professionals",
+      genderSkew: "moderately male-skewing in current X conversation patterns",
+      ageBand: "28-54",
+      buyerStage: "opportunity-aware readers scanning for market signals and practical takes",
+      rationale: "Finance and business keywords usually attract a performance-oriented audience on X."
+    };
+  }
+  if (creator) {
+    return {
+      primary: "creators, solo operators, marketers, and audience builders",
+      genderSkew: "mixed-gender audience with topic-dependent pockets",
+      ageBand: "22-40",
+      buyerStage: "solution-aware readers looking for repeatable formats and inspiration",
+      rationale: "Creator and content keywords point to a broad audience that responds to templates and personal proof."
+    };
+  }
+  return {
+    primary: "niche professionals and curious operators",
+    genderSkew: "unknown or mixed-gender audience",
+    ageBand: "24-45",
+    buyerStage: "problem-aware readers looking for clear examples",
+    rationale: "There is not enough public profile signal to assign a strong audience skew."
+  };
+}
+
+function inferTone(profile, ownTweets) {
+  const text = `${profile.description} ${ownTweets.map((tweet) => tweet.text).join(" ")}`;
+  const hasQuestions = ownTweets.some((tweet) => tweet.text.includes("?"));
+  const hasLists = ownTweets.some((tweet) => /\n[-•\d]/.test(tweet.text));
+  const hasProof = /\d|founder|built|growth|revenue|users|customer|launched/i.test(text);
+  if (hasLists && hasProof) return "practical, structured, and proof-led";
+  if (hasQuestions) return "curious, conversational, and exploratory";
+  if (hasProof) return "operator-led with credibility signals";
+  return "warm, concise, and still forming a distinctive angle";
+}
+
+function analyzeProfile(profile, ownTweets, similar, recommendedPosts, niche) {
+  const keywordList = topKeywords(profile.description, ownTweets.map((tweet) => tweet.text).join(" "), recommendedPosts.map((post) => post.text).join(" "));
+  const target = inferTargetDemographic(niche, profile, keywordList);
+  const avgEngagement = ownTweets.length ? Math.round(ownTweets.reduce((sum, tweet) => sum + tweet.score, 0) / ownTweets.length) : 0;
+  const bestOwnPost = [...ownTweets].sort((a, b) => b.score - a.score)[0] || null;
+
+  return {
+    archetype: profile.followers > 50000 ? "Established Authority" : profile.followers > 5000 ? "Niche Operator" : "Emerging Specialist",
+    positioning: `${niche} through a practical, personality-led lens.`,
+    tone: inferTone(profile, ownTweets),
+    targetDemographic: target,
+    contentPillars: inferContentPillars(niche, profile, keywordList),
+    strengths: [
+      profile.description ? "Public bio gives enough signal to infer a topical lane." : "Profile can become clearer with a sharper bio.",
+      similar.length ? "Comparable accounts with meaningful followings exist in this niche." : "The niche may need tighter wording to surface stronger reference accounts.",
+      bestOwnPost ? "Recent posts provide material for tone and format analysis." : "No recent original posts were available, so recommendations lean on niche search."
+    ],
+    gaps: [
+      "Make the audience explicit in the first line of the bio.",
+      "Create recurring post formats so readers know what to expect.",
+      "Use one concrete proof point or example per post."
+    ],
+    metrics: {
+      followers: profile.followers,
+      posts: profile.posts,
+      averageRecentEngagement: avgEngagement,
+      bestRecentPost: bestOwnPost
+    }
+  };
+}
+
+function patternForPost(text) {
+  if (/^\d+|(\n\d+\.)/.test(text)) return "numbered teardown";
+  if (text.includes("?")) return "question hook";
+  if (text.length > 220) return "dense opinion with proof";
+  if (/:/.test(text)) return "claim plus explanation";
+  return "sharp standalone take";
+}
+
+function refineRecommendedPosts(posts, profile) {
+  return posts
+    .filter((post) => post.author.toLowerCase() !== profile.handle.toLowerCase())
+    .filter((post) => post.followers >= 5000)
+    .slice(0, 8)
+    .map((post) => ({
+      ...post,
+      pattern: patternForPost(post.text),
+      whyReference: `${post.author} has ${formatMetric(post.followers)} followers and this post earned ${formatMetric(post.likes)} likes, so it is a useful structure to study.`,
+      borrow: post.text.includes("?") ? "Borrow the question-first tension, then answer with your own example." : "Borrow the structure and pacing, not the wording or claim.",
+      avoid: "Do not copy phrasing, jokes, screenshots, or personal claims."
+    }));
 }
 
 async function searchNitter(query, minLikes, debug = false) {
@@ -497,6 +668,7 @@ async function handleXProfile(req, res) {
   try {
     const profile = await lookupTwitterProfile(username);
     const query = profileSearchQuery(profile, niche);
+    const ownTweets = await searchUserTweets(profile.id);
     const similarSearch = await searchTwitterOfficial(query, 20, {
       maxPages: 6,
       maxTweets: 40,
@@ -506,14 +678,23 @@ async function handleXProfile(req, res) {
         limit: 8
       }
     });
+    const viralSearch = await searchTwitterOfficial(query, 100, {
+      maxPages: 8,
+      maxTweets: 24
+    });
+    const recommendedPosts = refineRecommendedPosts(viralSearch.tweets, profile);
+    const analysis = analyzeProfile(profile, ownTweets, similarSearch.handles, recommendedPosts, query);
 
     send(res, 200, JSON.stringify({
       profile,
       query,
       source: similarSearch.source,
       similar: similarSearch.handles,
+      analysis,
+      ownTweets: ownTweets.slice(0, 6),
+      recommendedPosts,
       samplePosts: similarSearch.tweets.slice(0, 6),
-      errors: similarSearch.errors
+      errors: [...(similarSearch.errors || []), ...(viralSearch.errors || [])]
     }));
   } catch (error) {
     send(res, 500, JSON.stringify({ error: error.message }));

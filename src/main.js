@@ -22,6 +22,9 @@ const state = {
     status: "idle",
     profile: null,
     similar: [],
+    analysis: null,
+    recommendedPosts: [],
+    ownTweets: [],
     query: "",
     errors: []
   },
@@ -273,6 +276,7 @@ function xConnectModal() {
 
 function xProfileResults() {
   const profile = state.xConnect.profile;
+  const analysis = state.xConnect.analysis;
   return `
     <section class="profile-result">
       <article class="profile-card">
@@ -287,6 +291,45 @@ function xProfileResults() {
           <span>${formatCount(profile.posts)} posts</span>
         </footer>
       </article>
+      ${
+        analysis
+          ? `<div class="profile-analysis-grid">
+              <article>
+                <p class="eyebrow">Archetype</p>
+                <h3>${escapeHtml(analysis.archetype)}</h3>
+                <p>${escapeHtml(analysis.positioning)}</p>
+              </article>
+              <article>
+                <p class="eyebrow">Tone</p>
+                <h3>${escapeHtml(analysis.tone)}</h3>
+                <p>Recent average engagement: ${formatCount(analysis.metrics?.averageRecentEngagement || 0)}</p>
+              </article>
+              <article>
+                <p class="eyebrow">Target demographic</p>
+                <h3>${escapeHtml(analysis.targetDemographic.primary)}</h3>
+                <p>${escapeHtml(analysis.targetDemographic.genderSkew)} · ages ${escapeHtml(analysis.targetDemographic.ageBand)}</p>
+              </article>
+              <article>
+                <p class="eyebrow">Buyer stage</p>
+                <h3>${escapeHtml(analysis.targetDemographic.buyerStage)}</h3>
+                <p>${escapeHtml(analysis.targetDemographic.rationale)}</p>
+              </article>
+            </div>
+            <div class="pillar-row">
+              ${(analysis.contentPillars || []).map((pillar) => `<span>${escapeHtml(pillar)}</span>`).join("")}
+            </div>
+            <div class="insight-columns">
+              <article>
+                <p class="eyebrow">Strengths</p>
+                ${(analysis.strengths || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
+              </article>
+              <article>
+                <p class="eyebrow">Gaps to improve</p>
+                ${(analysis.gaps || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
+              </article>
+            </div>`
+          : ""
+      }
       <div class="section-title">
         <p class="eyebrow">Similar profiles / ${escapeHtml(state.xConnect.query)}</p>
         <h2>Accounts to reference with 5K+ followers</h2>
@@ -307,6 +350,36 @@ function xProfileResults() {
                 .join("")}
             </div>`
           : `<div class="empty-mini">No similar profiles with 5K+ followers came back for this query yet. Try a clearer niche keyword in onboarding, then analyze again.</div>`
+      }
+      <div class="section-title">
+        <p class="eyebrow">Viral posts to study</p>
+        <h2>Use these structures as references</h2>
+      </div>
+      ${
+        state.xConnect.recommendedPosts.length
+          ? `<div class="reference-post-list">
+              ${state.xConnect.recommendedPosts
+                .map(
+                  (post) => `
+                    <article>
+                      <header>
+                        <a href="${post.profileUrl}" target="_blank" rel="noreferrer">${escapeHtml(post.author)}</a>
+                        <a href="${post.postUrl}" target="_blank" rel="noreferrer">${formatCount(post.likes)} likes</a>
+                      </header>
+                      <pre>${escapeHtml(post.text)}</pre>
+                      <footer>
+                        <span>${escapeHtml(post.pattern)}</span>
+                        <span>${formatCount(post.followers)} followers</span>
+                      </footer>
+                      <p><strong>Why refer:</strong> ${escapeHtml(post.whyReference)}</p>
+                      <p><strong>Borrow:</strong> ${escapeHtml(post.borrow)}</p>
+                      <p><strong>Avoid:</strong> ${escapeHtml(post.avoid)}</p>
+                    </article>
+                  `
+                )
+                .join("")}
+            </div>`
+          : `<div class="empty-mini">No high-fit viral reference posts found yet. Try a tighter niche keyword and analyze again.</div>`
       }
     </section>
   `;
@@ -936,6 +1009,9 @@ function bindEvents() {
       if (!response.ok) throw new Error(result.error || "X profile analysis failed");
       state.xConnect.profile = result.profile;
       state.xConnect.similar = result.similar || [];
+      state.xConnect.analysis = result.analysis || null;
+      state.xConnect.recommendedPosts = result.recommendedPosts || [];
+      state.xConnect.ownTweets = result.ownTweets || [];
       state.xConnect.query = result.query || state.onboarding.niche;
       state.xConnect.errors = result.errors || [];
       state.onboarding.bio = result.profile?.description || state.onboarding.bio;
