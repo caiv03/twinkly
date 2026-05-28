@@ -1,0 +1,13 @@
+{
+  "name": "viral-jar-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "build": "node --check src/main.js && node --check server.js",
+    "preview": "PORT=4175 node server.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
